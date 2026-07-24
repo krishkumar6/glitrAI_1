@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GlitrAI Mini Content Engine</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.4rem; }
+  form { display: flex; flex-direction: column; gap: 0.6rem; border: 1px solid #8884; padding: 1rem; border-radius: 8px; margin-bottom: 2rem; }
+  label { font-weight: 600; font-size: 0.9rem; }
+  input, textarea { padding: 0.5rem; font-size: 1rem; border-radius: 4px; border: 1px solid #8888; }
+  button { padding: 0.6rem; font-size: 1rem; border-radius: 4px; border: none; background: #4f46e5; color: white; cursor: pointer; }
+  button:disabled { opacity: 0.6; cursor: not-allowed; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid #8884; font-size: 0.9rem; }
+  tr { cursor: pointer; }
+  tr:hover { background: #8882; }
+  .badge { padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
+  .pending, .processing { background: #f59e0b33; color: #b45309; }
+  .completed { background: #22c55e33; color: #15803d; }
+  .failed { background: #ef444433; color: #b91c1c; }
+  #detail { border: 1px solid #8884; padding: 1rem; border-radius: 8px; margin-top: 1rem; }
+  #detail img { max-width: 100%; border-radius: 6px; margin-top: 0.5rem; }
+  .imgs { display: flex; gap: 1rem; flex-wrap: wrap; }
+  .imgs > div { flex: 1; min-width: 220px; }
+  .hidden { display: none; }
+  #status-msg { font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<h1>GlitrAI &mdash; Mini Content Engine</h1>
+
+<form id="generate-form">
+  <label for="product_name">Product name</label>
+  <input id="product_name" name="product_name" required placeholder="Florentine Wooden Salad Bowl" />
+
+  <label for="description">Short description</label>
+  <textarea id="description" name="description" rows="3" required placeholder="A match made in summer - salads and wooden bowls..."></textarea>
+
+  <label for="image">Product image (optional)</label>
+  <input id="image" name="image" type="file" accept="image/*" />
+
+  <button type="submit" id="submit-btn">Generate</button>
+  <span id="status-msg"></span>
+</form>
+
+<h2>Jobs</h2>
+<button id="refresh-btn">Refresh</button>
+<table>
+  <thead><tr><th>Product</th><th>Status</th><th>Created</th></tr></thead>
+  <tbody id="jobs-body"></tbody>
+</table>
+
+<div id="detail" class="hidden"></div>
+
+<script>
+const form = document.getElementById('generate-form');
+const submitBtn = document.getElementById('submit-btn');
+const statusMsg = document.getElementById('status-msg');
+const jobsBody = document.getElementById('jobs-body');
+const detail = document.getElementById('detail');
+
+async function loadJobs() {
+  const res = await fetch('/jobs');
+  const jobs = await res.json();
+  jobsBody.innerHTML = '';
+  for (const job of jobs) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(job.product_name)}</td>
+      <td><span class="badge ${job.status}">${job.status}</span></td>
+      <td>${new Date(job.created_at).toLocaleString()}</td>
+    `;
+    tr.addEventListener('click', () => loadDetail(job.id));
+    jobsBody.appendChild(tr);
+  }
+}
+
+async function loadDetail(id) {
+  const res = await fetch(`/jobs/${id}`);
+  if (!res.ok) return;
+  const job = await res.json();
+  detail.classList.remove('hidden');
+  detail.innerHTML = `
+    <h3>${escapeHtml(job.product_name)} <span class="badge ${job.status}">${job.status}</span></h3>
+    <p>${escapeHtml(job.description)}</p>
+    ${job.generated_prompt ? `<p><em>Generated prompt:</em> ${escapeHtml(job.generated_prompt)}</p>` : ''}
+    ${job.error_message ? `<p style="color:#b91c1c">Error: ${escapeHtml(job.error_message)}</p>` : ''}
+    <div class="imgs">
+      ${job.input_image_url ? `<div><strong>Input</strong><img src="${job.input_image_url}" /></div>` : ''}
+      ${job.result_image_url ? `<div><strong>Result</strong><img src="${job.result_image_url}" /></div>` : ''}
+      ${job.status === 'processing' || job.status === 'pending' ? '<div><strong>Result</strong><p>Still generating&hellip;</p></div>' : ''}
+    </div>
+  `;
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  submitBtn.disabled = true;
+  statusMsg.textContent = 'Submitting...';
+  const formData = new FormData(form);
+  if (!formData.get('image') || formData.get('image').size === 0) {
+    formData.delete('image');
+  }
+  try {
+    const res = await fetch('/generate', { method: 'POST', body: formData });
+    if (!res.ok) throw new Error(await res.text());
+    const job = await res.json();
+    statusMsg.textContent = `Job ${job.id} created (${job.status}).`;
+    form.reset();
+    await loadJobs();
+    loadDetail(job.id);
+    pollUntilDone(job.id);
+  } catch (err) {
+    statusMsg.textContent = 'Error: ' + err.message;
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
+document.getElementById('refresh-btn').addEventListener('click', loadJobs);
+
+function pollUntilDone(id) {
+  const interval = setInterval(async () => {
+    const res = await fetch(`/jobs/${id}`);
+    const job = await res.json();
+    if (job.status === 'completed' || job.status === 'failed') {
+      clearInterval(interval);
+      loadDetail(id);
+      loadJobs();
+    } else {
+      loadDetail(id);
+    }
+  }, 3000);
+}
+
+loadJobs();
+</script>
+</body>
+</html>
