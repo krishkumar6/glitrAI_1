@@ -64,6 +64,38 @@ This repo includes a `render.yaml` Blueprint that provisions a free web service
 
 `DATABASE_URL` is wired automatically from the linked Render Postgres instance.
 
+## Optional: ComfyUI backend (open-source image gen via Colab)
+
+As an alternative to Pollinations, the service can call a self-hosted [ComfyUI](https://github.com/comfyanonymous/ComfyUI) instance running a **img2img + upscaler** workflow (reference product photo + text prompt in, upscaled generated image out).
+
+### 1. Stand up ComfyUI on a free Colab GPU
+
+Open [`comfyui/colab_setup.ipynb`](comfyui/colab_setup.ipynb) in Google Colab (upload it, or File > Upload notebook), set the runtime to a T4 GPU, and run every cell in order. It will:
+
+- Install ComfyUI
+- Download a base SD1.5 checkpoint and a RealESRGAN 4x upscale model
+- Launch the ComfyUI server
+- Expose it publicly via a free Cloudflare Tunnel (no signup) and print the public URL
+
+The printed `https://*.trycloudflare.com` URL is your `COMFYUI_BASE_URL`. **It's ephemeral** — every time the Colab runtime restarts or the tunnel cell reruns, you get a new URL and need to update the setting below.
+
+### 2. Point the backend at it
+
+The workflow itself lives at [`comfyui/workflow_api.json`](comfyui/workflow_api.json) (also bundled into the backend at `backend/app/data/comfyui_workflow.json`) — a ComfyUI API-format graph:
+
+`LoadImage` (reference photo) → `VAEEncode` → `KSampler` (img2img, `denoise: 0.55`, conditioned on the LLM-generated prompt) → `VAEDecode` → `UpscaleModelLoader` + `ImageUpscaleWithModel` (RealESRGAN 4x) → `SaveImage`.
+
+To use it, set on the backend (`.env` locally, or Render's Environment tab):
+
+```
+IMAGE_BACKEND=comfyui
+COMFYUI_BASE_URL=https://your-tunnel-url.trycloudflare.com
+```
+
+`IMAGE_BACKEND=comfyui` only takes effect for jobs that include an uploaded reference image (the workflow requires one for img2img). It automatically falls back to Pollinations if `COMFYUI_BASE_URL` is unset, unreachable, or the ComfyUI job errors out — so a stale Colab tunnel degrades gracefully instead of failing jobs.
+
+The integration code is in [`backend/app/services/comfyui_client.py`](backend/app/services/comfyui_client.py): it uploads the reference image via `/upload/image`, injects the prompt and reference filename into the workflow graph, queues it via `/prompt`, polls `/history/{id}`, and fetches the final upscaled image via `/view`.
+
 ## Design notes
 
 - **Why store images in Postgres instead of disk**: Render's free web service tier has an ephemeral filesystem — it's wiped whenever the instance spins down after inactivity and back up. Storing generated/uploaded image bytes as `LargeBinary` columns means jobs stay retrievable regardless of instance restarts, without needing external object storage (S3, etc.) for an MVP.

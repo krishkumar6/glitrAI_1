@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     groq_model: str = "llama-3.3-70b-versatile"
     app_base_url: str = ""
 
+    # "pollinations" (default, keyless) or "comfyui" (requires comfyui_base_url
+    # and a reference image on the job; falls back to pollinations otherwise).
+    image_backend: str = "pollinations"
+    comfyui_base_url: str = ""
+
     class Config:
         env_file = ".env"
 

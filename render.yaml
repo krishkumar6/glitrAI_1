@@ -15,6 +15,10 @@ services:
         sync: false
       - key: GROQ_MODEL
         value: llama-3.3-70b-versatile
+      - key: IMAGE_BACKEND
+        value: pollinations
+      - key: COMFYUI_BASE_URL
+        sync: false
 
 databases:
   - name: glitrai-db

@@ -10,6 +10,8 @@ from .config import settings
 from .database import Base, SessionLocal, engine, get_db
 from .models import JobStatus
 from .schemas import JobCreateResponse, JobDetail, JobListItem
+from .services.comfyui_client import ComfyUIError
+from .services.comfyui_client import generate_image as generate_image_comfyui
 from .services.image_gen import ImageGenError, generate_image
 from .services.llm import LLMError, generate_image_prompt
 
@@ -47,15 +49,32 @@ def process_job(job_id: str) -> None:
                 f"{job.description} Soft natural lighting, clean background, high detail."
             )
 
-        reference_url = None
-        if job.input_image and not settings.public_base_url.startswith("http://localhost"):
-            reference_url = f"{settings.public_base_url}/jobs/{job_id}/image/input"
+        image_bytes = None
+        content_type = None
 
-        try:
-            image_bytes, content_type = generate_image(prompt, reference_url)
-        except ImageGenError as exc:
-            crud.fail_job(db, job, str(exc), generated_prompt=prompt)
-            return
+        use_comfyui = (
+            settings.image_backend == "comfyui"
+            and settings.comfyui_base_url
+            and job.input_image is not None
+        )
+        if use_comfyui:
+            try:
+                image_bytes, content_type = generate_image_comfyui(
+                    settings.comfyui_base_url, prompt, job.input_image, job.input_image_content_type
+                )
+            except ComfyUIError as exc:
+                logger.warning("ComfyUI backend failed for job %s, falling back: %s", job_id, exc)
+
+        if image_bytes is None:
+            reference_url = None
+            if job.input_image and not settings.public_base_url.startswith("http://localhost"):
+                reference_url = f"{settings.public_base_url}/jobs/{job_id}/image/input"
+
+            try:
+                image_bytes, content_type = generate_image(prompt, reference_url)
+            except ImageGenError as exc:
+                crud.fail_job(db, job, str(exc), generated_prompt=prompt)
+                return
 
         crud.complete_job(db, job, prompt, image_bytes, content_type)
     except Exception as exc:  # noqa: BLE001
