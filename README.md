@@ -4,6 +4,12 @@ Takes a product name + description (+ optional product photo), turns it into an
 image-generation prompt via an LLM, generates a product image, and lets you track
 the job and view the result.
 
+## Submission
+
+- **Hosted app**: https://glitrai-backend.onrender.com
+- **ComfyUI workflow (Img2Img + upscaler)**: [`comfyui/workflow_api.json`](comfyui/workflow_api.json)
+- **ComfyUI screenshots** (two runs, same reference image + prompt): [`comfyui/screenshots/`](comfyui/screenshots/)
+
 ## Stack
 
 - **Backend**: FastAPI (Python), SQLAlchemy, PostgreSQL
