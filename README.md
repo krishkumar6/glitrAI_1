@@ -14,7 +14,8 @@ the job and view the result.
 
 - **Backend**: FastAPI (Python), SQLAlchemy, PostgreSQL
 - **LLM (prompt generation)**: [Groq](https://console.groq.com) (free tier, OpenAI-compatible chat API). If no `GROQ_API_KEY` is set, falls back to a deterministic template so the pipeline still runs end to end.
-- **Image generation**: [Pollinations.ai](https://pollinations.ai) (free, keyless). Uses the `kontext` image-to-image model with the uploaded product photo as a reference when the service is publicly reachable; otherwise falls back to text-to-image.
+- **Image generation**: [Pollinations.ai](https://pollinations.ai) (free, keyless). Calls are serialized and retried with backoff, because the keyless tier tolerates roughly one in-flight request (concurrent jobs otherwise get `429`) and its upstream intermittently returns `503 Queue full`. Expect ~45–60s per image.
+  - It still attempts the `kontext` image-to-image model with the uploaded photo as a reference, but **Pollinations now gates `kontext` behind an account** (`enter.pollinations.ai`), so on the keyless tier that attempt fails fast and the job falls back to text-to-image. For true image-to-image today, use the ComfyUI backend below.
 - **Frontend**: single static HTML page (vanilla JS + fetch), served by the backend
 - **Jobs**: persisted in Postgres (`pending` → `processing` → `completed`/`failed`), processed via FastAPI `BackgroundTasks`. Uploaded and generated images are stored as bytes in Postgres (not local disk), so nothing is lost when a free-tier instance spins down.
 
@@ -41,9 +42,10 @@ Open http://localhost:8000
 Without a `GROQ_API_KEY`, prompt generation uses a template fallback — the rest of
 the pipeline (job tracking, image generation, frontend) works unchanged.
 
-Note: the Pollinations `kontext` (image-to-image) path needs a **publicly reachable**
-URL to fetch your uploaded reference image from, so locally it's skipped and falls
-back to plain text-to-image. It's used automatically once deployed (see below).
+Note: the Pollinations `kontext` (image-to-image) path needs both a **publicly reachable**
+URL to fetch your uploaded reference image from and a Pollinations account, so in
+practice it falls back to plain text-to-image. The ComfyUI backend below is the
+working image-to-image route.
 
 ## Run locally (without Docker)
 
@@ -107,3 +109,4 @@ The integration code is in [`backend/app/services/comfyui_client.py`](backend/ap
 - **Why store images in Postgres instead of disk**: Render's free web service tier has an ephemeral filesystem — it's wiped whenever the instance spins down after inactivity and back up. Storing generated/uploaded image bytes as `LargeBinary` columns means jobs stay retrievable regardless of instance restarts, without needing external object storage (S3, etc.) for an MVP.
 - **Why BackgroundTasks over a task queue**: scope here is a single free-tier instance with no need for cross-process job distribution, so FastAPI's built-in `BackgroundTasks` (thread-pooled) is sufficient without adding Redis/Celery.
 - **Failure handling**: if the LLM call fails, a template prompt is used instead of failing the job. If image-to-image (with reference photo) fails, it retries as plain text-to-image before giving up. Only a genuine image-generation failure marks the job `failed`, with `error_message` populated.
+- **Why image generation is serialized**: the keyless Pollinations tier rate-limits concurrent requests (`429`) and its upstream sometimes reports `503 Queue full`. Submitting 5 jobs at once failed 3 of them. A process-wide lock plus retry-with-backoff (and rejecting empty/non-image `200` bodies so they aren't saved as results) took that to 5/5 completed, at the cost of throughput — queued jobs run one at a time. A single Render free instance makes a process-level lock sufficient; multiple instances would need a shared queue.
