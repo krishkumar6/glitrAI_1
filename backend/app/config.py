@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     database_url: str = "postgresql://postgres:postgres@localhost:5432/glitrai"
     groq_api_key: str = ""
-    groq_model: str = "llama-3.3-70b-versatile"
+    groq_model: str = "openai/gpt-oss-120b"
     app_base_url: str = ""
 
     # "pollinations" (default, keyless) or "comfyui" (requires comfyui_base_url

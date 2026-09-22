@@ -36,8 +36,14 @@ def generate_image_prompt(product_name: str, description: str) -> str:
             },
         ],
         "temperature": 0.7,
-        "max_tokens": 150,
+        # Reasoning models spend completion tokens on reasoning before emitting
+        # any content, so a tight cap returns finish_reason="length" with an
+        # empty message. The budget is generous; the prompt itself stays short.
+        "max_tokens": 1024,
     }
+    if _is_reasoning_model(settings.groq_model):
+        payload["reasoning_effort"] = "low"
+
     headers = {"Authorization": f"Bearer {settings.groq_api_key}"}
 
     try:
@@ -45,6 +51,18 @@ def generate_image_prompt(product_name: str, description: str) -> str:
             resp = client.post(GROQ_URL, json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()
-            return data["choices"][0]["message"]["content"].strip()
+            content = (data["choices"][0]["message"].get("content") or "").strip()
     except Exception as exc:  # noqa: BLE001
         raise LLMError(f"Groq prompt generation failed: {exc}") from exc
+
+    if not content:
+        # An empty completion is a failure, not a valid prompt - let the
+        # caller fall back to its template instead of generating on "".
+        raise LLMError("Groq returned an empty completion")
+
+    return content
+
+
+def _is_reasoning_model(model: str) -> bool:
+    """Groq's reasoning families accept reasoning_effort; others reject it."""
+    return model.startswith("openai/gpt-oss") or model.startswith("qwen/")
